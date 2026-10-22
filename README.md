@@ -1,4 +1,4 @@
-# Mini S&OP and inventory simulation for Online Retail in the UK
+# (In progress) Mini S&OP and inventory simulation for Online Retail in the UK
 
 ## Business question
 
@@ -24,48 +24,56 @@ How much stock should a shop hold for each product? Too little means empty shelv
 
 **What the data does not have:** stock levels, lead times, costs and a promotion calendar. So the stock part is a simulation. Every assumption goes on a visible **Assumptions** tab.
 
-**Size warning:** 1,067,371 rows is more than one Excel sheet can hold (1,048,576), so the file is expected to be split across two sheets. Check after you download. Google Sheets holds about 10 million cells and this file has about 8.5 million, so do not load the raw file into Sheets. First add up units per SKU per week with SQL or Python, then load only the weekly result into Sheets or Excel.
+**Size warning:** the file has 1,067,371 rows and about 8.5 million cells. That is too big for one Excel sheet (1,048,576 rows). It is also too big for Google Sheets (about 10 million cells). A database handles it easily. So all the cleaning and counting is done in SQL. Only small result tables go to Tableau.
+
+## Tools: how the pieces fit
+
+- **Google Colab** is a free notebook in the browser. It needs no install. Notebook: Project 6 notebook in Google Colab *(link to be added)*.
+- **DuckDB** is a small database that runs inside Colab. As far as I know it is free and fast on big tables. The logic is written in SQL. Python only loads the file and runs the SQL.
+- **Tableau Public** is free and public. As far as I know, charts can be built in the browser, which suits a Chromebook. Tableau announced this in 2021; check that it still works before relying on it. This data is open (CC BY 4.0), so making it public is fine.
+- **GitHub** stores the notebook, the `.sql` files and the README.
+
+### Honest view on SQL for this project
+
+- **Good fit:** cleaning, weekly totals, forecasts (window functions), forecast scores and KPIs. This is what analyst jobs ask for.
+- **Harder part:** the week-by-week stock simulation. Each week depends on the last one. In SQL this needs a recursive query. It is the hardest step. Python or a spreadsheet would be easier. SQL is still possible, and it is good practice.
+- **Not done in SQL:** the charts. Tableau does those.
 
 ## Method
 
-1. **Clean.** Remove these rows:
-   - cancellation invoices (or net them off, and say which was done)
-   - rows with zero or negative quantity or price
-   - StockCodes that are not products, such as postage, fees and manual adjustments (for example POST, M, DOT and BANK CHARGES; check the full list in the data)
+1. **Clean.** Flag each row with one status: cancellation, zero or negative quantity or price, not a product code, or keep. Count the rows per status. This is the cleaning log.
+2. **Explore.** Look at sales by month, top products and quiet weeks.
+3. **Weekly demand.** Add up units per SKU per week. A SKU is one product code. Build a full grid, so weeks with no sales show as zero.
+4. **Pick SKUs.** Choose 5 to 10 SKUs that sell in most weeks and show different patterns: steady, seasonal and lumpy.
+5. **Forecast** with four methods, using window functions: naive, 4-week average, 12-week average and seasonal naive (52 weeks back).
+6. **Choose** the method with the lowest WAPE on the validation weeks.
+7. **Stock rule.** Lead time L = 4 weeks. Service level 95% (z = 1.65). Order-up-to level = forecast demand over the next 5 weeks + safety stock.
+8. **Simulate** the 13 test weeks, one week at a time, with a recursive query. Run it for the chosen rule and for a simple baseline rule.
+9. **Promotion scenario.** Demand rises for 4 weeks. Compare a forecast that knows about it with one that does not.
+10. **Optional: new-product ramp-up.** Forecast a new SKU from the first weeks of earlier new SKUs.
+11. **S&OP pack.** Build it in Tableau from the result tables.
 
-   CustomerID is not needed for demand.
-2. **Aggregate.** Add up units per SKU per week. A SKU is a single product code. Pick 5 to 10 SKUs that sell in most weeks and show different patterns: steady, seasonal and lumpy.
-3. **Forecast.** Use the Project 5 methods on weekly data. Train on the first part. Test on the last four months of 2011, which include the Christmas peak.
-   > **Limitation:** there is only one earlier Christmas to learn from, so the seasonal methods get just one cycle.
-4. **Stock rule.** Every value is an assumption:
-   - Lead time L = 4 weeks.
-   - Target service level = 95% (the share of weeks with no stock-out; z = 1.65).
-   - Review the stock weekly.
-   - Safety stock = z × standard deviation of weekly forecast error × √L. This is the extra stock that covers forecast errors.
-   - Order-up-to level = forecast demand over L + 1 weeks + safety stock.
-5. **Simulate week by week.** Receive the orders that are due. Sell what is in stock. Record the demand that could not be met. Place a new order. Compare the simulated stock with actual weekly sales.
-6. **Measure.** Count stock-out weeks, units short, weeks of cover and overstock weeks. Overstock limit (assumption): more than 8 weeks of cover.
-7. **Christmas promotion scenario.** Add an assumed uplift to the November and December forecast. Compare stock-outs with and without it. The uplift is estimated from last year's Q4 compared with the months before, and is labelled as an estimate.
-8. **New-product ramp-up.** Find SKUs whose first sale comes after the data starts. Average their first 12 weeks into a ramp curve. Then forecast a new SKU's first weeks from that curve, scaled to its first two weeks of sales. Check that there are enough new SKUs before committing to this step.
-9. **S&OP pack.** Build a one-page S&OP pack for two or three months in a row. Include:
-   - forecast against actual in units, with bias and WAPE
-   - stock position against target
-   - what changed since last month
-   - the top three risks or decisions
+### The three periods
+
+| Period | Weeks | Purpose |
+|---|---|---|
+| Training | First full week up to the week of 28 February 2011 | Fit the methods |
+| Validation | Weeks starting 7 March to 29 August 2011 (26 weeks) | Pick the method and measure the error |
+| Test | Weeks starting 5 September to 28 November 2011 (13 weeks) | Run the simulation |
 
 ## KPIs
 
 1. **WAPE** and **bias**, as defined in Project 5.
 2. **Service level** = share of weeks with no stock-out.
-3. **Fill rate** = units shipped ÷ units demanded.
-4. **Weeks of cover** = stock ÷ average weekly demand.
-5. **Stock-out weeks** and **overstock weeks**.
+3. **Fill rate** = units sold ÷ units demanded.
+4. **Weeks of cover** = closing stock ÷ average weekly demand.
+5. **Stock-out weeks** and **overstock weeks** (more than 8 weeks of cover).
 
 ## Repository structure
 
 ```
-data/    raw download (not committed if too large) and weekly SKU totals
-sql/     cleaning and weekly aggregation queries
-docs/    assumptions, S&OP packs and notes
+data/    raw download (not committed if too large) and small result tables
+sql/     cleaning, weekly demand, forecast, simulation and KPI queries
+docs/    assumptions, S&OP pack and notes
 images/  charts and screenshots for this README
 ```
